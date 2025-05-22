@@ -10,19 +10,21 @@ from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 # Import ChatOpenAI for OpenAI-compatible endpoint
 from langchain_openai import ChatOpenAI
+# Import a Gradio theme
+import gradio.themes as gr_themes
 
 # --- Configuration ---
 DOCUMENTS_DIR = "./documents"  # Modify to your document directory
 PERSIST_DIR = "./chroma_db"     # Vector database storage directory
-EMBEDDING_MODEL_PATH = "/home/dxc/model/bge-m3"
+EMBEDDING_MODEL_PATH = "/mnt/dxc/model/bge-m3" # CRITICAL: Retrieval quality HEAVILY depends on this model. If issues persist, experimenting with other embedding models (e.g., from sentence-transformers) is STRONGLY recommended.
 EMBEDDING_DEVICE = "cuda:1" # Or 'cpu'
 # VLLM Server details (using OpenAI compatible endpoint)
 VLLM_BASE_URL = "http://localhost:8000/v1" # Default for `vllm serve`
 VLLM_API_KEY = "dummy-key" # Required by ChatOpenAI, but VLLM server doesn't usually check it
-VLLM_MODEL_NAME = "/home/dxc/model/qwen2.5-7b" # The model name used in `vllm serve`
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 200
-SEARCH_K = 3 # Number of documents to retrieve
+VLLM_MODEL_NAME = "/mnt/dxc/model/qwen3-8b" # The model name used in `vllm serve`
+CHUNK_SIZE = 512 # Adjusted for bge-m3, which can handle more context
+CHUNK_OVERLAP = 100  # Adjusted overlap (approx 20% of CHUNK_SIZE)
+SEARCH_K = 10 # Retrieve more chunks to increase chances of finding specific sentences
 # --- End Configuration ---
 
 # Global variables
@@ -52,7 +54,23 @@ def split_documents(documents):
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
-        length_function=len
+        length_function=len,
+        separators=[
+            "\n\n",  # Split by double newlines (paragraphs)
+            "\n",    # Split by single newlines
+            ". ",    # Split by period followed by space (ensure space to avoid splitting mid-sentence e.g. Mr. Smith)
+            "? ",    # Split by question mark followed by space
+            "! ",    # Split by exclamation mark followed by space
+            "。 ",   # Chinese period followed by space (if applicable)
+            "？ ",   # Chinese question mark followed by space (if applicable)
+            "！ ",   # Chinese exclamation mark followed by space (if applicable)
+            "。\n",  # Chinese period followed by newline
+            "？\n",  # Chinese question mark followed by newline
+            "！\n",  # Chinese exclamation mark followed by newline
+            " ",     # Split by space as a fallback
+            ""       # Finally, split by character if no other separator is found
+        ],
+        is_separator_regex=False
     )
     return text_splitter.split_documents(documents)
 
@@ -69,9 +87,13 @@ def get_vector_db(chunks, embeddings, persist_directory):
     if os.path.exists(persist_directory) and os.listdir(persist_directory):
         print(f"Loading existing vector database from {persist_directory}...")
         try:
+            # When loading, ChromaDB will check for dimension compatibility.
+            # If EMBEDDING_MODEL_PATH changed leading to a dimension mismatch, this will fail.
             return Chroma(persist_directory=persist_directory, embedding_function=embeddings)
         except Exception as e:
-            print(f"Error loading existing vector database: {e}. Will attempt to create a new one if chunks are provided.")
+            print(f"Error loading existing vector database: {e}.")
+            print(f"This might be due to a change in the embedding model and a dimension mismatch.")
+            print(f"If you changed EMBEDDING_MODEL_PATH, you MUST delete the old database directory: {persist_directory}")
             # If loading fails, proceed as if it doesn't exist, but only create if chunks are given later.
             return None # Indicate loading failed or DB doesn't exist in a usable state
     else:
@@ -112,6 +134,8 @@ def create_rag_chain(vector_db, llm):
     # 创建文档组合链
     combine_docs_chain = create_stuff_documents_chain(llm, retrieval_qa_prompt)
     # 创建检索链
+    # Using default similarity search. If this fails, and embedding model is good,
+    # then advanced retrieval or query transformation might be needed.
     retriever = vector_db.as_retriever(search_kwargs={"k": SEARCH_K})
     rag_chain = create_retrieval_chain(retriever, combine_docs_chain)
 
@@ -120,10 +144,34 @@ def create_rag_chain(vector_db, llm):
 # 7. Function to process query using the RAG chain (Modified for Streaming)
 def process_query(query):
     """Processes a user query using the RAG chain and streams the answer."""
-    global rag_chain
+    global rag_chain, vector_db # Add vector_db to globals accessed here for debugging
     if rag_chain is None:
         yield "错误：RAG 链未初始化。"
         return
+
+    # --- For Debugging Retrieval ---
+    # Uncomment the block below to see what documents are retrieved by the vector DB
+    if vector_db:
+        try:
+            retrieved_docs = vector_db.similarity_search(query, k=SEARCH_K)
+            print(f"\n--- Retrieved Documents for query: '{query}' ---")
+            for i, doc in enumerate(retrieved_docs):
+                # Attempt to get score if retriever supports it (Chroma's similarity_search_with_score)
+                # For basic similarity_search, score might not be directly in metadata.
+                # If using retriever.get_relevant_documents(), score might be present.
+                score = doc.metadata.get('score', 'N/A') # Placeholder, actual score retrieval might differ
+                if hasattr(doc, 'score'): # Check if score attribute exists directly
+                    score = doc.score
+                
+                print(f"Doc {i+1} (Score: {score}):")
+                print(f"Content: {doc.page_content[:500]}...") # Print first 500 chars
+                print(f"Metadata: {doc.metadata}")
+            print("--- End Retrieved Documents ---\n")
+        except Exception as e:
+            print(f"Error during debug similarity_search: {e}")
+    else:
+        print("Vector DB not initialized, skipping debug retrieval.")
+    # --- End Debugging Retrieval ---
 
     try:
         print(f"开始处理流式查询: {query}")
@@ -141,6 +189,9 @@ def process_query(query):
             answer_part = chunk.get("answer", "")
             if answer_part:
                 full_answer += answer_part
+                # Debugging output
+                # print(f"Raw answer_part from LLM: '{answer_part}'")
+                # print(f"Yielding to Gradio: '{full_answer}'")
                 yield full_answer # Yield the progressively built answer
 
         if not full_answer:
@@ -288,9 +339,45 @@ def handle_file_upload(file_obj):
         # Return error and current doc list
         return f"文件上传或处理失败: {e}", get_loaded_documents_list()
 
+# Updated function to handle query submission for gr.Chatbot
+def handle_submit_with_thinking(query_text, chat_history):
+    if not query_text or query_text.strip() == "":
+        # Optionally, add a message to chat_history if query is empty, or do nothing
+        # chat_history.append((None, "请输入问题。"))
+        yield "", chat_history # Clear input, return current history
+        return
+
+    chat_history.append((query_text, "思考中..."))
+    yield "", chat_history # Clear input, update history with user query and "Thinking..."
+
+    # This variable will hold the latest full response from the RAG chain
+    # as process_query yields accumulated responses.
+    final_response_from_rag = "思考中..." 
+
+    for stream_chunk in process_query(query_text): # process_query yields full accumulated answer
+        final_response_from_rag = stream_chunk
+        chat_history[-1] = (query_text, final_response_from_rag) # Update the AI's part of the last message
+        yield "", chat_history
+    
+    # If process_query finishes and the last message was still "思考中..."
+    # (e.g., if process_query yielded an error or empty response immediately)
+    # ensure it's updated. However, process_query should yield a proper final message.
+    if chat_history and chat_history[-1][1] == "思考中...":
+        # This case implies process_query might not have yielded a replacement.
+        # If final_response_from_rag is still "思考中...", it means process_query didn't provide a different final state.
+        # This should ideally be handled by process_query yielding a specific error or "no answer" message.
+        # For safety, if final_response_from_rag is still "思考中...", we can set a generic error.
+        # However, current process_query yields "抱歉，未能生成回答。" which is good.
+        pass
+
+
 # 10. 主函数 (Modified for Gradio Blocks, Upload, Doc List, Streaming, and Usage Guide)
 def main():
     global embeddings, llm, rag_chain # Declare globals needed
+
+    print(f"IMPORTANT: Current embedding model is {EMBEDDING_MODEL_PATH}.")
+    print(f"If you recently changed the embedding model and encounter dimension mismatch errors,")
+    print(f"you MUST manually delete the ChromaDB directory: '{PERSIST_DIR}' and restart.")
 
     # Ensure documents directory exists at start
     if not os.path.exists(DOCUMENTS_DIR):
@@ -317,21 +404,90 @@ def main():
     # Get initial document list
     initial_doc_list = get_loaded_documents_list()
 
+    # --- Custom CSS for ChatGPT-like styling ---
+    # Base styling - can be expanded significantly
+    custom_css = """
+body, .gradio-container { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+.gradio-container { background-color: #F7F7F8; } /* Light background */
+
+/* Chatbot styling */
+.gr-chatbot { border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+.gr-chatbot .message-wrap { box-shadow: none !important; } /* Remove default shadow on messages */
+.gr-chatbot .message.user { background-color: #FFFFFF; border: 1px solid #E5E5E5; color: #333; border-radius: 18px; padding: 10px 15px; margin-left: auto; max-width: 70%;}
+.gr-chatbot .message.bot { background-color: #F7F7F8; border: 1px solid #E5E5E5; color: #333; border-radius: 18px; padding: 10px 15px; max-width: 70%;}
+.gr-chatbot .message.bot.thinking { color: #888; font-style: italic; } /* Style for "Thinking..." */
+
+/* Input area styling */
+#chat_input_row { /* Style for the Row containing input and button */
+    display: flex !important;
+    align-items: center !important; /* Vertically align items (textbox and button) */
+    gap: 8px !important; /* Add a small gap between textbox and button */
+}
+#chat_input_row .gr-textbox textarea { 
+    border-radius: 18px !important; 
+    border: 1px solid #E0E0E0 !important; 
+    padding: 12px 15px !important; 
+    font-size: 1rem !important;
+    background-color: #FFFFFF !important;
+    box-sizing: border-box !important; /* Ensure padding and border are part of the element's total width and height */
+    line-height: 1.4 !important; /* Consistent line height */
+    min-height: 46px !important; /* Ensure a minimum height, helps with single line consistency */
+}
+#chat_input_row .gr-button { 
+    border-radius: 18px !important; 
+    font-weight: 500 !important;
+    background-color: #10A37F !important; /* ChatGPT-like green */
+    color: white !important; 
+    border: none !important;
+    min-width: 80px !important;
+    font-size: 1rem !important; /* Match textarea font size */
+    /* Textarea has 12px padding + 1px border = 13px effective 'outer' space top/bottom. */
+    /* Button has no border, so its padding should be 13px top/bottom. */
+    padding: 13px 15px !important; 
+    box-sizing: border-box !important; /* Ensure padding is part of the element's total width and height */
+    line-height: 1.4 !important; /* Match textarea line height */
+    height: 46px !important; /* Explicit height to match textarea's typical single-line height */
+}
+#chat_input_row .gr-button:hover { background-color: #0F8E6C !important; }
+
+/* General Tab Styling */
+.tab-nav button { border-radius: 8px 8px 0 0 !important; padding: 10px 15px !important; }
+.tab-nav button.selected { background-color: #E0E0E0 !important; border-bottom: 2px solid #10A37F !important;}
+.gr-panel { background-color: #FFFFFF; border-radius: 0 0 8px 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); } /* Panel for tab content */
+    """
+
     # --- Gradio Interface using Blocks ---
     print("\n设置 Gradio 界面...")
-    with gr.Blocks() as iface:
+    with gr.Blocks(theme=gr_themes.Soft(), css=custom_css) as iface:
         gr.Markdown(f"""
-        <h1 style='text-align: center; margin-bottom: 1rem'>简单 RAG 问答系统</h1>
-        <p style='text-align: center; font-size: 1rem; color: grey;'>根据已有的文档或您上传的文档提问。
-        使用Qwen 2.5-7B模型进行问答。支持流式回答。</p>
-
+        <div style='text-align: center;'>
+        <h1>耀安科技-煤矿大模型知识问答系统</h1>
+        <p>根据已有的文档或您上传的文档提问。</p>
+        </div>
         """)
 
         with gr.Tab("问答"):
-            # Textbox supports streaming updates when the function yields
-            chatbot_output = gr.Textbox(label="回答", interactive=False, lines=10)
-            query_input = gr.Textbox(lines=2, placeholder="在此输入您的问题...", label="问题")
-            submit_button = gr.Button("提交问题")
+            with gr.Column(elem_id="chat-column"): # Added a column for better layout control
+                chatbot_output = gr.Chatbot(
+                    label="对话窗口",
+                    bubble_full_width=False, # Bubbles don't take full width
+                    height=600, # Set a fixed height for the chat area
+                    avatar_images=(None, "https://img.icons8.com/fluency/48/chatbot.png"), # User avatar none, bot has a simple icon
+                    latex_delimiters=[
+                        {"left": "$$", "right": "$$", "display": True},
+                        {"left": "$", "right": "$", "display": False}
+                    ]
+                    # render_markdown=True,  # Explicitly set, default is True
+                    # sanitize_html=False    # Test by disabling HTML sanitization
+                )
+                with gr.Row(elem_id="chat_input_row"): # Row for input textbox and button
+                    query_input = gr.Textbox(
+                        show_label=False,
+                        placeholder="在此输入您的问题...",
+                        lines=1, # Single line input initially, can expand
+                        scale=4 # Textbox takes more space
+                    )
+                    submit_button = gr.Button("发送", scale=1) # "Send" button
 
         with gr.Tab("上传与管理文档"): # Renamed tab for clarity
             with gr.Row():
@@ -362,7 +518,7 @@ def main():
                - 切换到 **问答** 标签页。
                - 在 **问题** 输入框中输入您想基于文档内容提出的问题。
                - 点击 **提交问题** 按钮或按 Enter 键。
-               - 系统将根据文档内容检索相关信息，并使用大语言模型（Qwen 2.5-7B）生成回答。
+               - 系统将根据文档内容检索相关信息，并使用大语言模型（Qwen 3-8B）生成回答。
                - 回答将在 **回答** 框中以流式方式显示。
 
             **注意:**
@@ -373,16 +529,18 @@ def main():
 
 
         # --- Event Handlers ---
-        # Q&A Submission (No change needed here, Gradio handles generators for streaming)
+        # Q&A Submission for Chatbot
+        # The `fn` now takes query_input and chatbot_output (history)
+        # It returns a tuple: (new_value_for_query_input, new_value_for_chatbot_output)
         submit_button.click(
-            fn=process_query,
-            inputs=query_input,
-            outputs=chatbot_output
+            fn=handle_submit_with_thinking,
+            inputs=[query_input, chatbot_output],
+            outputs=[query_input, chatbot_output] # query_input is cleared, chatbot_output is updated
         )
-        query_input.submit( # Allow pressing Enter to submit
-             fn=process_query,
-             inputs=query_input,
-             outputs=chatbot_output
+        query_input.submit( 
+             fn=handle_submit_with_thinking,
+             inputs=[query_input, chatbot_output],
+             outputs=[query_input, chatbot_output]
         )
 
         # File Upload and Rebuild
