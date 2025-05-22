@@ -54,8 +54,12 @@ source ~/.bashrc
 ```bash
 #千问模型作为llm
 huggingface-cli download Qwen/Qwen2.5-7B-Instruct --local-dir ~/model/qwen2.5-7b --local-dir-use-symlinks False
+huggingface-cli download Qwen/Qwen3-8B --local-dir ~/model/qwen3-8b --local-dir-use-symlinks False
+
 #Embedding模型
 huggingface-cli download BAAI/bge-m3 --local-dir ~/model/bge-m3 --local-dir-use-symlinks False
+huggingface-cli download Alibaba-NLP/gte-Qwen2-1.5B-instruct --local-dir ~/model/get-qwen2-1.5b --local-dir-use-symlinks False
+huggingface-cli download sentence-transformers/all-MiniLM-L6-v2 --local-dir ~/model/all-minilm-l6 --local-dir-use-symlinks False
 ```
 
 ### 安装langchain相关包
@@ -70,4 +74,5 @@ pip install gradio
 
 ```bash
 vllm serve ~/model/qwen2.5-7b
+vllm serve /mnt/dxc/model/qwen3-8b --enable-reasoning --reasoning-parser deepseek_r1 --max-model-len 16384
 ```
