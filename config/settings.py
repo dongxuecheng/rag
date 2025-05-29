@@ -8,6 +8,10 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 from enum import Enum
 
+# Disable LangSmith tracing to avoid API key warnings
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
+os.environ.setdefault("LANGCHAIN_API_KEY", "")
+
 
 class LogLevel(str, Enum):
     DEBUG = "DEBUG"

@@ -64,14 +64,16 @@ class RAGInterface:
         with gr.Column(elem_id="chat-column"):
             # Chat interface
             chatbot_output = gr.Chatbot(
-                label="对话历史",
+                value=[{"role": "assistant", "content": "你好！有什么可以帮你的吗？"}],
+                show_label=False,
                 height=600,
-                bubble_full_width=False,
-                avatar_images=(None, "🤖"),
+                type="messages",
+                avatar_images=(None, None),  # 使用emoji作为头像
                 latex_delimiters=[
                     {"left": "$$", "right": "$$", "display": True},
                     {"left": "$", "right": "$", "display": False}
-                ]
+                ],
+                show_copy_button=True
             )
             
             # Input area
@@ -231,36 +233,41 @@ class RAGInterface:
         
         gr.Markdown(help_content)
     
-    def _handle_chat_submit(self, query: str, chat_history: List) -> Tuple[str, List]:
-        """Handle chat message submission."""
+    def _handle_chat_submit(self, query: str, chat_history: List) -> Iterator[Tuple[str, List]]:
+        """Handle chat message submission with immediate user message display."""
         try:
             if not query or not query.strip():
                 return "", chat_history
             
-            # Add user message to history
-            chat_history.append((query, "思考中..."))
+            # Immediately add user message and yield to display it
+            chat_history.append({"role": "user", "content": query})
+            yield "", chat_history
             
-            # Generate response
+            # Add thinking message for assistant
+            chat_history.append({"role": "assistant", "content": "思考中..."})
+            yield "", chat_history
+            
+            # Generate response with streaming updates
             full_response = ""
             for response_chunk in self.rag_system.process_query(query):
                 full_response = response_chunk
-                # Update the last message in history
-                chat_history[-1] = (query, full_response)
+                # Update the last assistant message in history
+                chat_history[-1] = {"role": "assistant", "content": full_response}
                 yield "", chat_history
             
             # Ensure we have a final response
             if not full_response or full_response == "思考中...":
-                chat_history[-1] = (query, "抱歉，未能生成回答。请检查系统状态或重新表述问题。")
-            
-            return "", chat_history
+                chat_history[-1] = {"role": "assistant", "content": "抱歉，未能生成回答。请检查系统状态或重新表述问题。"}
+                yield "", chat_history
             
         except Exception as e:
             logger.error(f"Error in chat submit: {str(e)}")
-            if chat_history:
-                chat_history[-1] = (query, f"处理消息时发生错误: {str(e)}")
+            if chat_history and len(chat_history) > 0 and chat_history[-1]["role"] == "assistant":
+                chat_history[-1] = {"role": "assistant", "content": f"处理消息时发生错误: {str(e)}"}
             else:
-                chat_history.append((query, f"处理消息时发生错误: {str(e)}"))
-            return "", chat_history
+                chat_history.append({"role": "user", "content": query})
+                chat_history.append({"role": "assistant", "content": f"处理消息时发生错误: {str(e)}"})
+            yield "", chat_history
     
     def _handle_file_upload(self, file_obj) -> Tuple[str, str]:
         """Handle file upload."""
@@ -365,7 +372,6 @@ class RAGInterface:
             padding: 12px 16px;
             margin: 8px 0;
             margin-left: auto;
-            max-width: 80%;
         }
         
         .message.bot {
@@ -375,7 +381,6 @@ class RAGInterface:
             border-radius: 18px 18px 18px 4px;
             padding: 12px 16px;
             margin: 8px 0;
-            max-width: 80%;
         }
         
         /* Tabs */

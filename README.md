@@ -109,7 +109,7 @@ conda activate rag
 pip install vllm
 
 # Start VLLM server
-vllm serve ~/model/qwen3-8b --enable-reasoning --reasoning-parser deepseek_r1 --max-model-len 16384 --host 0.0.0.0 --port 8000
+vllm serve /mnt/dxc/model/qwen3-8b --enable-reasoning --reasoning-parser deepseek_r1 --max-model-len 16384 --host 0.0.0.0 --port 8000
 ```
 
 ## 🚀 Quick Start
