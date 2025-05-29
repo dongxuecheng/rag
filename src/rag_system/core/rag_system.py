@@ -3,7 +3,7 @@ Main RAG System orchestrating all components.
 """
 import shutil
 from pathlib import Path
-from typing import List, Tuple, Iterator, Optional
+from typing import List, Tuple, Iterator
 
 from config.settings import settings
 from src.rag_system.core.document_processor import DocumentProcessor

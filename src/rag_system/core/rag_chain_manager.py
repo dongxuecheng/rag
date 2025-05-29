@@ -1,13 +1,11 @@
 """
 RAG chain management for combining retrieval and generation.
 """
-from typing import Iterator, Optional, Dict, Any
+from typing import Iterator, Dict, Any
 from langchain import hub
 from langchain.chains import create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.schema import Document
 
-from config.settings import settings
 from src.rag_system.core.vector_store_manager import VectorStoreManager
 from src.rag_system.core.llm_client import LLMClient
 from src.rag_system.utils.logger import get_logger

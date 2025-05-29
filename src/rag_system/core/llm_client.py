@@ -1,10 +1,9 @@
 """
 LLM client for interacting with VLLM server.
 """
-from typing import Iterator, Optional
+from typing import Iterator
 from langchain_openai import ChatOpenAI
 from langchain.callbacks.base import BaseCallbackHandler
-from langchain.schema import BaseMessage
 
 from config.settings import settings
 from src.rag_system.utils.logger import get_logger

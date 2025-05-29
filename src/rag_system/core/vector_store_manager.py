@@ -1,8 +1,6 @@
 """
 Vector store management for document embeddings and retrieval.
 """
-import os
-from pathlib import Path
 from typing import List, Optional
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma

@@ -1,10 +1,9 @@
 """
 Document processing utilities for loading and splitting documents.
 """
-import os
 from pathlib import Path
 from typing import List, Optional
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
+from langchain_community.document_loaders import PyMuPDFLoader, Docx2txtLoader, TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
 
@@ -36,8 +35,7 @@ class DocumentProcessor:
                 "！\n",    # Chinese exclamation mark followed by newline
                 " ",       # Split by space as a fallback
                 ""         # Finally, split by character
-            ],
-            is_separator_regex=False
+            ]
         )
     
     def load_document(self, file_path: Path) -> Optional[List[Document]]:
@@ -54,7 +52,7 @@ class DocumentProcessor:
             file_extension = file_path.suffix.lower()
             
             if file_extension == '.pdf':
-                loader = PyPDFLoader(str(file_path))
+                loader = PyMuPDFLoader(str(file_path))
             elif file_extension in ['.docx', '.doc']:
                 loader = Docx2txtLoader(str(file_path))
             elif file_extension == '.txt':
