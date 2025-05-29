@@ -1,5 +1,13 @@
+# Data directories
 chroma_db/
 documents/
+logs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
